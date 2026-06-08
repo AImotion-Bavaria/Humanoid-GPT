@@ -1,10 +1,10 @@
 """Online motion-capture retarget subprocess.
 
-Launches a background process that reads from OptiTrack, PNLink, or
-Xsens MVN, runs GMR (General Motion Retargeting), and writes the
-latest qpos_full into shared memory for the main deploy loop to
-consume.  Source selection is controlled by the ``mocap_type``
-argument (see :class:`MocapType`).
+Launches a background process that reads from PNLink or Xsens MVN,
+runs GMR (General Motion Retargeting), and writes the latest qpos_full
+into shared memory for the main deploy loop to consume.  Source
+selection is controlled by the ``mocap_type`` string (``"pnlink"`` or
+``"xsens"``; anything other than ``"xsens"`` falls back to PNLink).
 """
 
 from __future__ import annotations
@@ -14,18 +14,11 @@ import atexit
 import threading
 import numpy as np
 import multiprocessing as mp
-from enum import IntEnum
 from collections import deque
 from multiprocessing.sharedctypes import SynchronizedArray
 
 
-class MocapType(IntEnum):
-    OPTITRACK = 1
-    PNLINK = 2
-    XSENS = 3
-
-
-# Hand detection joint names (for PNLink / OptiTrack)
+# Hand detection joint names (for PNLink)
 _HAND_JOINTS = {
     "left":  {"wrist": "LeftHand"},
     "right": {"wrist": "RightHand"},
@@ -52,8 +45,7 @@ def _detect_hand_open(frame, wrist: str, threshold: float = _HAND_THRESHOLD):
 
 def _retarget_worker(
     buf, buf_hand, ts, ready_evt, stop_evt,
-    server_ip, client_ip, robot, use_multicast,
-    actual_human_height, mocap_type,
+    robot, actual_human_height, mocap_type,
     buffer_ms, rt_pin,
     xsens_host="0.0.0.0", xsens_port=9763, xsens_protocol="tcp",
 ):
@@ -78,24 +70,7 @@ def _retarget_worker(
 
     from general_motion_retargeting import GeneralMotionRetargeting as GMR
 
-    if mocap_type == MocapType.OPTITRACK:
-        from general_motion_retargeting.optitrack_vendor.NatNetClient import setup_optitrack
-        client = setup_optitrack(
-            server_address=server_ip, client_address=client_ip,
-            use_multicast=use_multicast,
-        )
-        if not client:
-            return
-        threading.Thread(target=client.run, daemon=True).start()
-        get_frame = client.get_frame_upgraded
-        src_human = "fbx"
-    elif mocap_type == MocapType.PNLINK:
-        from noitom import NoitomClient
-        client = NoitomClient()
-        client.start_thread()
-        get_frame = lambda: client.get_frame_data(timeout=True)
-        src_human = "fbx_noitom"
-    elif mocap_type == MocapType.XSENS:
+    if (mocap_type or "").lower() == "xsens":
         from deploy.xsens.client import XsensClient
         client = XsensClient(
             host=xsens_host, port=xsens_port, protocol=xsens_protocol,
@@ -104,7 +79,11 @@ def _retarget_worker(
         get_frame = lambda: client.get_frame_data(timeout=0.5)
         src_human = "fbx_xsens"
     else:
-        raise ValueError(f"Unknown mocap_type: {mocap_type}")
+        from noitom import NoitomClient
+        client = NoitomClient()
+        client.start_thread()
+        get_frame = lambda: client.get_frame_data(timeout=True)
+        src_human = "fbx_noitom"
 
     retarget = GMR(src_human=src_human, tgt_robot=robot, actual_human_height=actual_human_height)
 
@@ -194,7 +173,7 @@ def _retarget_worker(
             if not _use_jbuf and not ready_evt.is_set():
                 ready_evt.set()
     finally:
-        if mocap_type in (MocapType.PNLINK, MocapType.XSENS) and hasattr(client, "stop"):
+        if hasattr(client, "stop"):
             client.stop()
 
 
@@ -208,14 +187,11 @@ def _visualize_worker(buf, stop_evt, robot="unitree_g1"):
 
 
 def start_realtime_retarget(
-    server_ip: str,
-    client_ip: str,
     robot: str = "unitree_g1",
-    use_multicast: bool = False,
     dof_full: int = 36,
     actual_human_height: float = 1.6,
     visualize_retarget: bool = False,
-    mocap_type: MocapType = MocapType.PNLINK,
+    mocap_type: str = "pnlink",
     buffer_ms: float = 0.0,
     rt_pin: tuple[int, int] | None = None,
     xsens_host: str = "0.0.0.0",
@@ -250,8 +226,7 @@ def start_realtime_retarget(
     p = ctx.Process(
         target=_retarget_worker,
         args=(buf, buf_hand, ts, ready_evt, stop_evt,
-              server_ip, client_ip, robot, use_multicast,
-              actual_human_height, mocap_type, buffer_ms, rt_pin,
+              robot, actual_human_height, mocap_type, buffer_ms, rt_pin,
               xsens_host, xsens_port, xsens_protocol),
         daemon=True,
     )

@@ -58,21 +58,6 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 import pygame  # noqa: E402  – needed for DeployKeyboardCMD fork workaround
 
 
-def _resolve_mocap_type(name: str):
-    """Map the ``--mocap_type`` string to a :class:`MocapType` enum value.
-
-    Kept here (instead of inside each run_* function) so both
-    simulation and real-robot loops route mocap selection identically.
-    """
-    from deploy.retarget import MocapType
-    key = (name or "").lower()
-    if key == "pnlink":
-        return MocapType.PNLINK
-    if key == "xsens":
-        return MocapType.XSENS
-    return MocapType.OPTITRACK
-
-
 # ---------------------------------------------------------------------------
 # Mocap buffer with caching and linear extrapolation
 # ---------------------------------------------------------------------------
@@ -417,15 +402,12 @@ def run_sim(args: "DeployArgs"):
     if not args.no_mocap:
         try:
             from deploy.retarget import start_realtime_retarget
-            mocap_type = _resolve_mocap_type(args.mocap_type)
             buf_mocap, ts_mocap, buf_hand = start_realtime_retarget(
-                server_ip=args.server_ip,
-                client_ip=args.client_ip,
                 robot="unitree_g1",
                 dof_full=7 + 29,
                 actual_human_height=args.human_height,
                 visualize_retarget=args.visualize_retarget,
-                mocap_type=mocap_type,
+                mocap_type=args.mocap_type,
                 buffer_ms=args.buffer_ms,
                 xsens_host=args.xsens_host,
                 xsens_port=args.xsens_port,
@@ -640,13 +622,11 @@ def run_real(args: "DeployArgs"):
     live_converter = LiveRefConverter(phantom_model, ctrl_dt)
 
     # Online retarget
-    mocap_type = _resolve_mocap_type(args.mocap_type)
     buf_mocap, ts_mocap, buf_hand = start_realtime_retarget(
-        server_ip=args.server_ip, client_ip=args.client_ip,
         robot="unitree_g1", dof_full=7 + 29,
         actual_human_height=args.human_height,
         visualize_retarget=args.visualize_retarget,
-        mocap_type=mocap_type,
+        mocap_type=args.mocap_type,
         buffer_ms=args.buffer_ms,
         xsens_host=args.xsens_host,
         xsens_port=args.xsens_port,
@@ -787,9 +767,7 @@ class DeployArgs:
 
     # Mocap
     no_mocap: bool = False
-    mocap_type: str = "pnlink"  # one of: pnlink | optitrack | xsens
-    server_ip: str = "169.254.117.205"
-    client_ip: str = "169.254.117.206"
+    mocap_type: str = "pnlink"  # one of: pnlink | xsens
     human_height: float = 1.7
     visualize_retarget: bool = True
     buffer_ms: float = 30.0

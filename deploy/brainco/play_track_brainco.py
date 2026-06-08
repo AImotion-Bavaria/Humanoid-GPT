@@ -39,7 +39,7 @@ from deploy.play_track import DeployArgs as PlayTrackArgs
 from deploy.play_track import LiveRefConverter, MocapBuffer, run_sim
 from deploy.constants import DEFAULT_QPOS as DEFAULT_QPOS_JOINT, KDs_walking, KPs_walking
 
-from deploy.retarget import MocapType, _visualize_worker
+from deploy.retarget import _visualize_worker
 from deploy.walk_policy import WalkPolicy
 from tracking.policy import Args as PolicyArgs, get_policy_onnx
 
@@ -169,10 +169,7 @@ def _retarget_worker_with_brainco_hands(
     ts,
     ready_evt,
     stop_evt,
-    server_ip,
-    client_ip,
     robot,
-    use_multicast,
     actual_human_height,
     mocap_type,
     buffer_ms,
@@ -192,20 +189,7 @@ def _retarget_worker_with_brainco_hands(
     from deploy.brainco.noitom_hand_retarget import _retarget_noitom_hand_qpos
     from general_motion_retargeting import GeneralMotionRetargeting as GMR
 
-    if mocap_type == MocapType.OPTITRACK:
-        from general_motion_retargeting.optitrack_vendor.NatNetClient import setup_optitrack
-
-        client = setup_optitrack(
-            server_address=server_ip,
-            client_address=client_ip,
-            use_multicast=use_multicast,
-        )
-        if not client:
-            return
-        threading.Thread(target=client.run, daemon=True).start()
-        get_frame = client.get_frame_upgraded
-        src_human = "fbx"
-    elif mocap_type == MocapType.PNLINK:
+    if (mocap_type or "").lower() == "pnlink":
         from noitom import NoitomClient
 
         client = NoitomClient()
@@ -320,19 +304,16 @@ def _retarget_worker_with_brainco_hands(
             if not use_jbuf and not ready_evt.is_set():
                 ready_evt.set()
     finally:
-        if mocap_type == MocapType.PNLINK and hasattr(client, "stop"):
+        if (mocap_type or "").lower() == "pnlink" and hasattr(client, "stop"):
             client.stop()
 
 
 def start_realtime_retarget_with_brainco_hands(
-    server_ip: str,
-    client_ip: str,
     robot: str = "unitree_g1",
-    use_multicast: bool = False,
     dof_full: int = 36,
     actual_human_height: float = 1.6,
     visualize_retarget: bool = True,
-    mocap_type: MocapType = MocapType.PNLINK,
+    mocap_type: str = "pnlink",
     buffer_ms: float = 0.0,
     hand_target: str = "brainco2",
     rt_pin: tuple[int, int] | None = None,
@@ -357,10 +338,7 @@ def start_realtime_retarget_with_brainco_hands(
             ts,
             ready_evt,
             stop_evt,
-            server_ip,
-            client_ip,
             robot,
-            use_multicast,
             actual_human_height,
             mocap_type,
             buffer_ms,
@@ -569,15 +547,12 @@ def run_real(args: "NaoDeployArgs"):
     infer_fn = G1TrackInferFn(env_cfg, phantom_model, track_policy, privileged=False)
     live_converter = LiveRefConverter(phantom_model, ctrl_dt)
 
-    mocap_type = MocapType.PNLINK if args.mocap_type == "pnlink" else MocapType.OPTITRACK
     buf_mocap, ts_mocap, buf_hand, buf_hand_qpos = start_realtime_retarget_with_brainco_hands(
-        server_ip=args.server_ip,
-        client_ip=args.client_ip,
         robot="unitree_g1",
         dof_full=7 + 29,
         actual_human_height=args.human_height,
         visualize_retarget=args.visualize_retarget,
-        mocap_type=mocap_type,
+        mocap_type="pnlink",
         buffer_ms=args.buffer_ms,
         hand_target=args.hand_target,
     )
@@ -744,8 +719,6 @@ class NaoDeployArgs:
     # Mocap
     no_mocap: bool = False
     mocap_type: str = "pnlink"
-    server_ip: str = "169.254.117.205"
-    client_ip: str = "169.254.117.206"
     human_height: float = 1.7
     visualize_retarget: bool = True
     buffer_ms: float = 30.0
@@ -775,8 +748,6 @@ def _to_play_track_args(args: NaoDeployArgs) -> PlayTrackArgs:
         freq=args.freq,
         no_mocap=args.no_mocap,
         mocap_type=args.mocap_type,
-        server_ip=args.server_ip,
-        client_ip=args.client_ip,
         human_height=args.human_height,
         visualize_retarget=args.visualize_retarget,
         buffer_ms=args.buffer_ms,

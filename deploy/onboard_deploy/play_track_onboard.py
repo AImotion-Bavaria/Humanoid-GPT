@@ -7,7 +7,6 @@ tracking) can run over an SSH session on the G1's onboard Jetson computer.
 Usage (after SSH into G1):
     python -m deploy.onboard_deploy.play_track_onboard
     python -m deploy.onboard_deploy.play_track_onboard --no-mocap
-    python -m deploy.onboard_deploy.play_track_onboard --server-ip 192.168.1.100
 
 Modes (number keys):
     0 = Walk (velocity commands via WASD/QE)
@@ -665,7 +664,7 @@ def _run_onboard(stdscr, args: "OnboardArgs"):
     from unitree_sdk2py.utils.thread import RecurrentThread
     from deploy.real_robot import LowLevelControlG1, KeyMap
     from deploy.hand_control import Dex3Controller, update_hand_from_mocap
-    from deploy.retarget import start_realtime_retarget, MocapType, read_hand_buffer
+    from deploy.retarget import start_realtime_retarget, read_hand_buffer
 
     freq = args.freq
     ctrl_dt = 1.0 / freq
@@ -708,17 +707,12 @@ def _run_onboard(stdscr, args: "OnboardArgs"):
     buf_hand = None
     if not args.no_mocap:
         try:
-            mocap_type = (
-                MocapType.PNLINK if args.mocap_type == "pnlink" else MocapType.OPTITRACK
-            )
             buf_mocap, ts_mocap, buf_hand = start_realtime_retarget(
-                server_ip=args.server_ip,
-                client_ip=args.client_ip,
                 robot="unitree_g1",
                 dof_full=7 + 29,
                 actual_human_height=args.human_height,
                 visualize_retarget=False,
-                mocap_type=mocap_type,
+                mocap_type=args.mocap_type,
                 buffer_ms=args.buffer_ms,
                 # Onboard-only: pin GMR to core 2 with SCHED_FIFO prio 40.
                 # Mirrors bench_online_full.py and keeps mocap jitter low on
@@ -727,7 +721,7 @@ def _run_onboard(stdscr, args: "OnboardArgs"):
             )
             mocap_buffer = MocapBuffer(buf_mocap, ts_mocap)
             keyboard.set_status(mocap_status=f"Connected ({args.mocap_type})")
-            _log.info(f"Mocap retarget started ({args.mocap_type} @ {args.server_ip})")
+            _log.info(f"Mocap retarget started ({args.mocap_type})")
         except Exception as e:
             keyboard.set_status(mocap_status=f"Failed: {e}")
             _log.error(f"Mocap init failed: {e}")
@@ -944,11 +938,7 @@ class OnboardArgs:
     # Mocap
     no_mocap: bool = False
     mocap_type: str = "pnlink"
-    """Mocap backend: 'pnlink' (Noitom over WiFi) or 'optitrack'."""
-    server_ip: str = "192.168.1.100"
-    """Noitom/OptiTrack server IP (must be reachable from G1 via WiFi)."""
-    client_ip: str = ""
-    """Client IP (only needed for OptiTrack multicast, leave empty for PNLink)."""
+    """Mocap backend: 'pnlink' (Noitom over WiFi) or 'xsens'."""
     human_height: float = 1.7
     buffer_ms: float = 50.0
 

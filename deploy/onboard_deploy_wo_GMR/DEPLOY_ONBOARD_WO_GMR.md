@@ -139,8 +139,7 @@ That alone saves a few hundred MB and trims dependencies on the Jetson.
 ```bash
 # Noitom Axis Studio (default):
 python -m deploy.onboard_deploy_wo_GMR.host_sender \
-    --robot-ip 192.168.1.42 \
-    --server-ip 192.168.1.100        # Noitom Axis server
+    --robot-ip 192.168.1.42
 
 # Xsens MVN (Network Streamer, TCP, default port 9763):
 python -m deploy.onboard_deploy_wo_GMR.host_sender \
@@ -152,23 +151,22 @@ python -m deploy.onboard_deploy_wo_GMR.host_sender \
 
 Useful flags:
 
-| Flag                    | Default          | Description                                                                                  |
-|-------------------------|------------------|----------------------------------------------------------------------------------------------|
-| `--robot-ip`            | `192.168.1.42`   | G1 Jetson WiFi address.                                                                      |
-| `--robot-port`          | `51234`          | UDP port; must match the robot's `--listen-port`.                                            |
-| `--mocap-type`          | `pnlink`         | `pnlink`, `optitrack`, or `xsens`.                                                           |
-| `--server-ip`           | `192.168.1.100`  | Mocap server IP (Noitom / OptiTrack).  Ignored for Xsens (the MVN streamer connects to us). |
-| `--xsens-host`          | `0.0.0.0`        | Local bind address for the MVN MXTP02 listener.  Xsens-only.                                |
-| `--xsens-port`          | `9763`           | Local port MVN Studio connects to.  Xsens-only; must match MVN Studio.                       |
-| `--xsens-protocol`      | `tcp`            | `tcp` or `udp` — must match MVN Studio's Network Streamer.  Xsens-only.                     |
-| `--human-height`        | `1.7`            | Passed through to GMR for retargeting calibration.                                           |
-| `--buffer-ms`           | `0.0`            | Host-side GMR jitter buffer. Keep 0 so each retargeted frame is forwarded ASAP.              |
-| `--send-hz`             | `0.0`            | `0` = send-on-update (track GMR rate, ~90 Hz). Set e.g. `60` to cap on flaky WiFi.           |
-| `--no-hand`             | off              | Strip the 4-float Dex3-style hand payload (open/dist).  Has no effect on BrainCo.            |
-| `--enable-brainco-hand` | off              | Switch to the BrainCo-aware GMR subprocess and append a 24-D BrainCo hand qpos per packet.   |
-| `--hand-target`         | `brainco2`       | GMR hand target -- one of `brainco`, `brainco2`, `brainco3`.                                 |
-| `--visualize-retarget`  | off              | Also spawn a mujoco viewer on the workstation (works for Noitom/OptiTrack/Xsens, and BrainCo).  Needs a display server -- don't enable over plain SSH. |
-| `--log-every-sec`       | `2.0`            | Stats print interval (`send Hz / lag / loss / bandwidth`).                                   |
+| Flag                    | Default         | Description                                                                                                                                            |
+|-------------------------|-----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--robot-ip`            | `192.168.1.42`  | G1 Jetson WiFi address.                                                                                                                                |
+| `--robot-port`          | `51234`         | UDP port; must match the robot's `--listen-port`.                                                                                                      |
+| `--mocap-type`          | `pnlink`        | `pnlink` or `xsens`.                                                                                                                                   |
+| `--xsens-host`          | `0.0.0.0`       | Local bind address for the MVN MXTP02 listener.  Xsens-only.                                                                                           |
+| `--xsens-port`          | `9763`          | Local port MVN Studio connects to.  Xsens-only; must match MVN Studio.                                                                                 |
+| `--xsens-protocol`      | `tcp`           | `tcp` or `udp` — must match MVN Studio's Network Streamer.  Xsens-only.                                                                                |
+| `--human-height`        | `1.7`           | Passed through to GMR for retargeting calibration.                                                                                                     |
+| `--buffer-ms`           | `0.0`           | Host-side GMR jitter buffer. Keep 0 so each retargeted frame is forwarded ASAP.                                                                        |
+| `--send-hz`             | `0.0`           | `0` = send-on-update (track GMR rate, ~90 Hz). Set e.g. `60` to cap on flaky WiFi.                                                                     |
+| `--no-hand`             | off             | Strip the 4-float Dex3-style hand payload (open/dist).  Has no effect on BrainCo.                                                                      |
+| `--enable-brainco-hand` | off             | Switch to the BrainCo-aware GMR subprocess and append a 24-D BrainCo hand qpos per packet.                                                             |
+| `--hand-target`         | `brainco2`      | GMR hand target -- one of `brainco`, `brainco2`, `brainco3`.                                                                                           |
+| `--visualize-retarget`  | off             | Also spawn a mujoco viewer on the workstation (works for Noitom/Xsens, and BrainCo).  Needs a display server -- don't enable over plain SSH.           |
+| `--log-every-sec`       | `2.0`           | Stats print interval (`send Hz / lag / loss / bandwidth`).                                                                                             |
 
 You'll see lines like:
 

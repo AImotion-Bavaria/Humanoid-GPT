@@ -307,8 +307,7 @@ The startup sequence uses the wireless remote for safety:
 | `--onnx-track`   | `storage/ckpts/pns_wo_priv216.onnx` | Tracking policy path                  |
 | `--track-dir`    | `storage/test`                   | Offline trajectory folder             |
 | `--no-mocap`     | `False`                             | Disable online motion capture         |
-| `--mocap-type`   | `pnlink`                            | `pnlink` or `optitrack`               |
-| `--server-ip`    | `192.168.1.100`                     | Mocap streaming server IP             |
+| `--mocap-type`   | `pnlink`                            | `pnlink` or `xsens`                   |
 | `--human-height` | `1.7`                               | Retarget height calibration (meters)  |
 | `--buffer-ms`    | `30.0`                              | Jitter buffer for mocap stream (ms)   |
 | `--enable-hand`  | `False`                             | Enable Dex3-1 hand control            |

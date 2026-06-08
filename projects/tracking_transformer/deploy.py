@@ -7,7 +7,7 @@ all reused from the dense-tracking deployment stack.
 
 Modes (keyboard number keys):
     0 = Walk policy
-    1 = Online retarget (Noitom / OptiTrack mocap)
+    1 = Online retarget (Noitom / Xsens mocap)
     2+ = Offline tracking (reference trajectories from track_dir)
 
 Usage::
@@ -113,14 +113,12 @@ def run_sim(args: "DeployArgs"):
     mocap_buffer = None
     if not args.no_mocap:
         try:
-            from deploy.retarget import start_realtime_retarget, MocapType
-            mocap_type = MocapType.PNLINK if args.mocap_type == "pnlink" else MocapType.OPTITRACK
+            from deploy.retarget import start_realtime_retarget
             buf_mocap, ts_mocap, _ = start_realtime_retarget(
-                server_ip=args.server_ip, client_ip=args.client_ip,
                 robot="unitree_g1", dof_full=7 + 29,
                 actual_human_height=args.human_height,
                 visualize_retarget=args.visualize_retarget,
-                mocap_type=mocap_type, buffer_ms=args.buffer_ms,
+                mocap_type=args.mocap_type, buffer_ms=args.buffer_ms,
             )
             mocap_buffer = MocapBuffer(buf_mocap, ts_mocap)
             print("[Mocap] Retarget subprocess started.")
@@ -269,7 +267,7 @@ def run_real(args: "DeployArgs"):
     from unitree_sdk2py.utils.thread import RecurrentThread
     from deploy.real_robot import LowLevelControlG1, KeyMap
     from deploy.hand_control import Dex3Controller, update_hand_from_mocap
-    from deploy.retarget import start_realtime_retarget, MocapType, read_hand_buffer
+    from deploy.retarget import start_realtime_retarget, read_hand_buffer
 
     freq = args.freq
     ctrl_dt = 1.0 / freq
@@ -305,13 +303,11 @@ def run_real(args: "DeployArgs"):
     )
     live_converter = LiveRefConverter(phantom_model, ctrl_dt)
 
-    mocap_type = MocapType.PNLINK if args.mocap_type == "pnlink" else MocapType.OPTITRACK
     buf_mocap, ts_mocap, buf_hand = start_realtime_retarget(
-        server_ip=args.server_ip, client_ip=args.client_ip,
         robot="unitree_g1", dof_full=7 + 29,
         actual_human_height=args.human_height,
         visualize_retarget=args.visualize_retarget,
-        mocap_type=mocap_type, buffer_ms=args.buffer_ms,
+        mocap_type=args.mocap_type, buffer_ms=args.buffer_ms,
     )
     mocap_buffer = MocapBuffer(buf_mocap, ts_mocap)
 
@@ -446,8 +442,6 @@ class DeployArgs:
     # Mocap
     no_mocap: bool = False
     mocap_type: str = "pnlink"
-    server_ip: str = "169.254.117.205"
-    client_ip: str = "169.254.117.206"
     human_height: float = 1.7
     visualize_retarget: bool = True
     buffer_ms: float = 30.0

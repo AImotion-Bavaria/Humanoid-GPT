@@ -25,7 +25,7 @@ import tyro
 
 import deploy.retarget as retarget_module
 from deploy.onboard_deploy._bench_utils import aarch64_preload, print_environment_info
-from deploy.retarget import MocapType, read_mocap_buffer, start_realtime_retarget
+from deploy.retarget import read_mocap_buffer, start_realtime_retarget
 
 aarch64_preload()
 
@@ -42,12 +42,6 @@ class BenchNoitomArgs:
 
     poll_hz: float = 200.0
     """Main-process polling rate for the shared mocap buffer."""
-
-    server_ip: str = "192.168.1.100"
-    """Kept aligned with play_track_onboard; PNLink currently uses NoitomClient."""
-
-    client_ip: str = ""
-    """Client IP; unused for PNLink but kept for API symmetry."""
 
     human_height: float = 1.7
     """Human height passed to GMR retargeting."""
@@ -258,18 +252,16 @@ def main(args: BenchNoitomArgs) -> None:
     print_environment_info(extra_packages=["noitom", "general_motion_retargeting"])
     print("\nStarting Noitom PNLink retarget subprocess...")
     print(
-        f"  server_ip={args.server_ip}  human_height={args.human_height:.2f}  "
+        f"  human_height={args.human_height:.2f}  "
         f"buffer_ms={args.buffer_ms:.1f}  gmr_rt_pin={args.gmr_rt_pin}"
     )
 
     buf_mocap, ts_mocap, _ = start_realtime_retarget(
-        server_ip=args.server_ip,
-        client_ip=args.client_ip,
         robot="unitree_g1",
         dof_full=7 + 29,
         actual_human_height=args.human_height,
         visualize_retarget=False,
-        mocap_type=MocapType.PNLINK,
+        mocap_type="pnlink",
         buffer_ms=args.buffer_ms,
         rt_pin=args.gmr_rt_pin,
     )

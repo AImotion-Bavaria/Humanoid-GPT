@@ -5,7 +5,7 @@ GMR retarget runs in an independent subprocess writing to shared memory,
 while the main loop reads from shared memory and runs the tracking policy.
 
 Uses synthetic mocap frames (random perturbations of a T-pose) so no
-real Noitom/OptiTrack connection is needed.
+real Noitom connection is needed.
 
 Segments measured (main loop):
 
@@ -143,7 +143,7 @@ def _gmr_worker(
     except (OSError, PermissionError):
         pass
 
-    src_human = "fbx_noitom" if mocap_type == "pnlink" else "fbx"
+    src_human = "fbx_xsens" if mocap_type == "xsens" else "fbx_noitom"
     gmr = GMR(src_human=src_human, tgt_robot="unitree_g1",
               actual_human_height=human_height)
     body_names = list(gmr.human_scale_table.keys())

@@ -20,10 +20,10 @@ Core files:
 
 
 | File              | Description                                                              |
-| ----------------- | ------------------------------------------------------------------------ |
+|-------------------|--------------------------------------------------------------------------|
 | `play_track.py`   | Unified runtime entry for simulation and real robot                      |
 | `walk_policy.py`  | ONNX walk policy wrapper                                                 |
-| `retarget.py`     | Online mocap retarget subprocess (PNLink / OptiTrack)                    |
+| `retarget.py`     | Online mocap retarget subprocess (PNLink / Xsens)                        |
 | `real_robot.py`   | Low-level robot interface (IMU/joints readout and PD command publishing) |
 | `hand_control.py` | Dex3-1 hand controller                                                   |
 | `keyboard_cmd.py` | Keyboard UI for mode/velocity control                                    |
@@ -71,7 +71,6 @@ pip install -e thirdparty/noitom
 ```
 
 `noitom` is required for the default `pnlink` mocap backend.
-If only OptiTrack is used, run with `--mocap-type optitrack`.
 
 ### 4. Real-robot dependencies
 
@@ -161,7 +160,7 @@ match the values you pass on the Linux side.
 4. On the Linux host:
 
 ```bash
-python -m deploy.play_track --real --net <nic_name> --mocap_type pnlink or xsens
+python -m deploy.play_track --real --net <nic_name> --mocap_type pnlink
 ```
 
 #### Xsens MVN Analyze / Animate (`--mocap_type xsens`)
@@ -225,8 +224,6 @@ python -m deploy.play_track --track-dir storage/test/human_walking_50Hz_29dof.np
 ```bash
 python -m deploy.play_track --real --net <nic_name>
 python -m deploy.play_track --real --net <nic_name> --enable-hand
-python -m deploy.play_track --real --net <nic_name> \
-  --mocap-type optitrack --server-ip <server_ip> --client-ip <client_ip>
 python -m deploy.play_track --real --net <nic_name> --visualize-retarget False
 ```
 
@@ -236,7 +233,7 @@ python -m deploy.play_track --real --net <nic_name> --visualize-retarget False
 
 
 | Key     | Function                                           |
-| ------- | -------------------------------------------------- |
+|---------|----------------------------------------------------|
 | `0`     | Walk mode                                          |
 | `1`     | Online retarget mode                               |
 | `2`-`9` | Offline trajectory modes (sorted from `track_dir`) |
@@ -259,7 +256,7 @@ Mode keys are single-character digits; in practice, keep offline trajectories wi
 
 
 | Argument               | Default                            | Meaning                                        |
-| ---------------------- | ---------------------------------- | ---------------------------------------------- |
+|------------------------|------------------------------------|------------------------------------------------|
 | `--real`               | `False`                            | Enable real-robot mode                         |
 | `--net`                | `enx00e04c161320`                  | DDS network interface                          |
 | `--freq`               | `50`                               | Control frequency (Hz)                         |
@@ -268,15 +265,8 @@ Mode keys are single-character digits; in practice, keep offline trajectories wi
 | `--policy-type`        | `mlp`                              | Policy architecture (`mlp`)                    |
 | `--track-dir`          | `storage/test`                     | Offline trajectory folder or single `.npz`     |
 | `--no-mocap`           | `False`                            | Disable online mocap in simulation             |
-| `--mocap-type`         | `pnlink`                           | `pnlink`, `optitrack`, or `xsens`              |
-| `--server-ip`          | `169.254.117.205`                  | Mocap server IP (OptiTrack)                    |
-| `--client-ip`          | `169.254.117.206`                  | Mocap client IP (OptiTrack)                    |
-| `--xsens-host`         | `0.0.0.0`                          | Local bind address for the Xsens receiver      |
-| `--xsens-port`         | `9763`                             | Xsens MVN Network Streamer port                |
-| `--xsens-protocol`     | `tcp`                              | Xsens stream protocol (`tcp` or `udp`)         |
+| `--mocap-type`         | `pnlink`                           | `pnlink` or `xsens`                            |
 | `--human-height`       | `1.6`                              | Retargeting height prior                       |
 | `--visualize-retarget` | `True`                             | Enable retarget visualization process          |
 | `--enable-hand`        | `False`                            | Enable Dex3-1 hand control                     |
 | `--debug`              | `False`                            | Real mode without low-level command publishing |
-
-

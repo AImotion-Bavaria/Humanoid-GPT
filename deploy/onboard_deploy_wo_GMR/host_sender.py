@@ -25,10 +25,9 @@ broadcast over UDP to the robot.
 
 Usage::
 
-    # Noitom Axis Studio:
+    # Noitom Axis Studio (PNLink):
     python -m deploy.onboard_deploy_wo_GMR.host_sender \
-        --robot-ip 192.168.1.42 \
-        --server-ip 192.168.1.100
+        --robot-ip 192.168.1.42
 
     # Xsens MVN (Network Streamer; default port 9763, TCP):
     python -m deploy.onboard_deploy_wo_GMR.host_sender \
@@ -54,7 +53,6 @@ import tyro
 
 import deploy.retarget as retarget_module
 from deploy.retarget import (
-    MocapType,
     read_hand_buffer,
     read_mocap_buffer,
     start_realtime_retarget,
@@ -82,13 +80,8 @@ class HostSenderArgs:
 
     # ---- Mocap -------------------------------------------------------------
     mocap_type: str = "pnlink"
-    """'pnlink' (Noitom Axis Studio), 'optitrack', or 'xsens' (Xsens MVN
-    Network Streamer)."""
-    server_ip: str = "192.168.1.100"
-    """Noitom/OptiTrack server IP, reachable from the host.  Ignored when
-    --mocap-type xsens (Xsens MVN connects TO us)."""
-    client_ip: str = ""
-    """Local IP for OptiTrack multicast; leave empty for PNLink/Xsens."""
+    """'pnlink' (Noitom Axis Studio) or 'xsens' (Xsens MVN Network
+    Streamer)."""
     human_height: float = 1.7
 
     # ---- Xsens MVN (only used when --mocap-type xsens) ---------------------
@@ -207,18 +200,6 @@ def _install_signal_handlers() -> None:
     except (ValueError, OSError):
         # SIGTERM may not be installable in some sandboxes / threads.
         pass
-
-
-def _resolve_mocap_type(name: str) -> MocapType:
-    """Map the ``--mocap-type`` string to a :class:`MocapType` enum value.
-    Mirrors ``deploy.play_track._resolve_mocap_type`` so the two entry
-    points accept exactly the same flag values."""
-    key = (name or "").lower()
-    if key == "pnlink":
-        return MocapType.PNLINK
-    if key == "xsens":
-        return MocapType.XSENS
-    return MocapType.OPTITRACK
 
 
 def _wait_first_frame(buf_mocap, ts_mocap, timeout: float) -> None:
@@ -385,10 +366,8 @@ def _send_loop(
             win_lag_max = 0.0
 
 
-def _start_dex3_subprocess(args: HostSenderArgs, mocap_type: MocapType):
+def _start_dex3_subprocess(args: HostSenderArgs, mocap_type: str):
     buf_mocap, ts_mocap, buf_hand = start_realtime_retarget(
-        server_ip=args.server_ip,
-        client_ip=args.client_ip,
         robot="unitree_g1",
         dof_full=G1_DOF_FULL,
         actual_human_height=args.human_height,
@@ -398,8 +377,8 @@ def _start_dex3_subprocess(args: HostSenderArgs, mocap_type: MocapType):
         # No SCHED_FIFO on a workstation: leave the GMR subprocess as a
         # normal-priority child so it does not contend with the IDE / viewer.
         rt_pin=None,
-        # Xsens MVN options - silently ignored by the noitom / optitrack
-        # branches inside ``start_realtime_retarget``.
+        # Xsens MVN options - silently ignored by the noitom branch
+        # inside ``start_realtime_retarget``.
         xsens_host=args.xsens_host,
         xsens_port=args.xsens_port,
         xsens_protocol=args.xsens_protocol,
@@ -407,7 +386,7 @@ def _start_dex3_subprocess(args: HostSenderArgs, mocap_type: MocapType):
     return buf_mocap, ts_mocap, buf_hand, None
 
 
-def _start_brainco_subprocess(args: HostSenderArgs, mocap_type: MocapType):
+def _start_brainco_subprocess(args: HostSenderArgs, mocap_type: str):
     # Import lazily so workstations without the brainco stack can still use
     # the Dex3 path.  The helper is a thin wrapper around deploy.retarget's
     # worker plus the per-frame BrainCo hand-qpos retarget.
@@ -417,8 +396,6 @@ def _start_brainco_subprocess(args: HostSenderArgs, mocap_type: MocapType):
 
     buf_mocap, ts_mocap, buf_hand, buf_brainco_qpos = (
         start_realtime_retarget_with_brainco_hands(
-            server_ip=args.server_ip,
-            client_ip=args.client_ip,
             robot="unitree_g1",
             dof_full=G1_DOF_FULL,
             actual_human_height=args.human_height,
@@ -447,7 +424,7 @@ def main(args: HostSenderArgs) -> None:
             f"{args.xsens_protocol.upper()}  src_human=fbx_xsens"
         )
     else:
-        source_info = f"mocap_type={mocap_label}  server_ip={args.server_ip}"
+        source_info = f"mocap_type={mocap_label}"
     print(f"[host_sender] Starting mocap+GMR ({backend}) subprocess on this workstation...")
     print(
         f"[host_sender]   {source_info}  "
@@ -455,9 +432,9 @@ def main(args: HostSenderArgs) -> None:
         f"{('  hand_target=' + args.hand_target) if args.enable_brainco_hand else ''}"
     )
 
-    mocap_type = _resolve_mocap_type(args.mocap_type)
+    mocap_type = mocap_label
     if args.enable_brainco_hand:
-        if mocap_type == MocapType.XSENS:
+        if mocap_type == "xsens":
             raise SystemExit(
                 "[host_sender] --enable-brainco-hand requires per-finger mocap "
                 "data, which the standard 23-segment Xsens MVN stream does not "
