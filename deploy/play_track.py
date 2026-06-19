@@ -46,6 +46,7 @@ from tracking.infer_utils import G1TrackMjSim, G1TrackInferFn, g1_infer_env_conf
 from deploy.walk_policy import WalkPolicy
 from deploy.keyboard_cmd import DeployKeyboardCMD
 from deploy.constants import DEFAULT_QPOS as DEFAULT_QPOS_JOINT, KPs_walking, KDs_walking
+from tracking.sonic_reference import iter_sonic_motion_dirs, load_sonic_motion_dir
 from tracking.metrics import (
     calculate_kpt_mae_error,
     calculate_joint_tracking_error,
@@ -280,17 +281,29 @@ class LiveRefConverter:
 # Reference motion loading
 # ---------------------------------------------------------------------------
 
-def load_offline_motions(track_dir: str, mj_model: mujoco.MjModel, freq: int = 50) -> list[dict]:
-    """Load .npz reference trajectories, apply EMA and convert to kpt format.
+def load_offline_motions(
+    track_dir: str,
+    mj_model: mujoco.MjModel,
+    freq: int = 50,
+    sonic_frequency: float = 50.0,
+    sonic_joint_order: str = "isaaclab",
+    motion_speed: float = 1.0,
+) -> list[dict]:
+    """Load .npz or SONIC CSV reference trajectories and convert to kpt format.
 
     Returns list of dicts. Each dict has numpy-array fields (safe for
     jtu.tree_map) plus a ``_filename`` key that is excluded before tree_map.
     """
+    if motion_speed <= 0.0:
+        raise ValueError(f"motion_speed must be positive, got {motion_speed}")
+
     folder = Path(track_dir)
     if folder.is_file():
-        files = [folder]
+        files = [folder] if folder.suffix == ".npz" else []
+        sonic_dirs = []
     else:
         files = sorted(folder.glob("*.npz"))
+        sonic_dirs = iter_sonic_motion_dirs(folder)
 
     motions = []
     for f in files:
@@ -312,7 +325,7 @@ def load_offline_motions(track_dir: str, mj_model: mujoco.MjModel, freq: int = 5
             continue
 
         data["qpos"] = apply_ema_qpos(data["qpos"])
-        freq_src = float(data.get("frequency", data.get("fps", 50)))
+        freq_src = float(data.get("frequency", data.get("fps", 50))) * motion_speed
         kpt_data = qpos2kpt(
             mj_model, np.float32(data["qpos"]),
             freq_src=freq_src, freq_tgt=freq,
@@ -321,7 +334,35 @@ def load_offline_motions(track_dir: str, mj_model: mujoco.MjModel, freq: int = 5
             height_clip_mode=None, video_path=None,
         )
         motions.append({"data": kpt_data, "filename": f.name})
-        print(f"  Mode {len(motions)+1}: {f.name} ({len(kpt_data['qpos'])} frames)")
+        print(
+            f"  Mode {len(motions)+1}: {f.name} "
+            f"({len(kpt_data['qpos'])} frames, speed={motion_speed:g}x)"
+        )
+
+    for motion_dir in sonic_dirs:
+        data = load_sonic_motion_dir(
+            motion_dir,
+            frequency=sonic_frequency * motion_speed,
+            joint_order=sonic_joint_order,
+        )
+        data["qpos"] = apply_ema_qpos(data["qpos"])
+        kpt_data = qpos2kpt(
+            mj_model,
+            np.float32(data["qpos"]),
+            freq_src=float(data["frequency"]),
+            freq_tgt=freq,
+            interp_sec=0.5,
+            end_default_sec=0.5,
+            debug=False,
+            foot_contact_est=False,
+            height_clip_mode=None,
+            video_path=None,
+        )
+        motions.append({"data": kpt_data, "filename": f"{motion_dir.name} (SONIC)"})
+        print(
+            f"  Mode {len(motions)+1}: {motion_dir.name} "
+            f"(SONIC, {len(kpt_data['qpos'])} frames, speed={motion_speed:g}x)"
+        )
 
     return motions
 
@@ -380,7 +421,14 @@ def run_sim(args: "DeployArgs"):
     print("Loading offline reference motions...")
     print("  Mode 0: Walk")
     print("  Mode 1: Online retarget")
-    ref_motions = load_offline_motions(args.track_dir, convert_model, freq)
+    ref_motions = load_offline_motions(
+        args.track_dir,
+        convert_model,
+        freq,
+        sonic_frequency=args.sonic_frequency,
+        sonic_joint_order=args.sonic_joint_order,
+        motion_speed=args.motion_speed,
+    )
 
     # Keyboard
     keyboard = DeployKeyboardCMD(num_track_ref=len(ref_motions))
@@ -635,7 +683,14 @@ def run_real(args: "DeployArgs"):
     print("Loading offline reference motions...")
     print("  Mode 0: Walk")
     print("  Mode 1: Online retarget")
-    ref_motions = load_offline_motions(args.track_dir, convert_model, freq)
+    ref_motions = load_offline_motions(
+        args.track_dir,
+        convert_model,
+        freq,
+        sonic_frequency=args.sonic_frequency,
+        sonic_joint_order=args.sonic_joint_order,
+        motion_speed=args.motion_speed,
+    )
 
     # Pre-init pygame then quit video so the fork in KeyboardCmdPad
     # does not inherit an X11 fd (avoids "X connection broken").
@@ -808,6 +863,9 @@ class DeployArgs:
     real: bool = False
     debug: bool = False
     freq: int = 50
+    sonic_frequency: float = 50.0
+    sonic_joint_order: str = "isaaclab"
+    motion_speed: float = 1.0
 
     # Mocap
     no_mocap: bool = False

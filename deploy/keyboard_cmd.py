@@ -21,6 +21,11 @@ import pygame  # noqa: E402
 from deploy.constants import KEYBOARD_MAX_SPEED
 
 
+# Modes 0-9 keep their intuitive digit keys. Extra offline references use
+# nearby unused letter keys so folders with many trajectories do not crash.
+MODE_KEYS = tuple("0123456789uiopjklzxcvbnm")
+
+
 # ---------------------------------------------------------------------------
 # Primitives
 # ---------------------------------------------------------------------------
@@ -272,9 +277,9 @@ class CommandWindow:
             pygame.draw.rect(self.screen, border_color, rect, 2 if is_active else 1, 10)
 
             if mode_idx < len(_MODE_LABELS):
-                label = f"{mode_idx}: {_MODE_LABELS[mode_idx]}"
+                label = f"{mode_idx}[{mb.key}]: {_MODE_LABELS[mode_idx]}"
             else:
-                label = f"{mode_idx}: Track {mode_idx - 2}"
+                label = f"{mode_idx}[{mb.key}]: Track {mode_idx - 2}"
             tc = (255, 255, 255) if is_active else _TEXT_DIM
             lbl_surf = self.font_mode.render(label, True, tc)
             lbl_rect = lbl_surf.get_rect(center=rect.center)
@@ -495,6 +500,11 @@ class DeployKeyboardCMD:
 
     def __init__(self, num_track_ref: int = 2):
         self.num_mode = 2 + num_track_ref
+        if self.num_mode > len(MODE_KEYS):
+            raise ValueError(
+                f"Too many modes for keyboard mapping: {self.num_mode} modes, "
+                f"but only {len(MODE_KEYS)} keys are configured."
+            )
         self._cmd_pad = KeyboardCmdPad(
             dims=[
                 CmdDim(
@@ -512,7 +522,7 @@ class DeployKeyboardCMD:
                 CmdBtn("Kill", "`"),
                 CmdBtn("Reset", "r"),
             ]
-            + [CmdBtn(f"Mode{m}", str(m)) for m in range(self.num_mode)]
+            + [CmdBtn(f"Mode{m}", MODE_KEYS[m]) for m in range(self.num_mode)]
         )
         self._last_cmd = {f"Mode{m}": 0 for m in range(self.num_mode)}
         self._last_cmd["Reset"] = 0

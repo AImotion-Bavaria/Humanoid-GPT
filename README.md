@@ -116,6 +116,9 @@ python tracking/convert_qpos2kpt.py --mocap_npz <mocap_path.npz> --debug   # sin
 python tracking/convert_parallel.py --src_dir <in_dir> --save_dir <out_dir> --num_workers 32
 ```
 
+For detailed motion field definitions, G1 joint order, and SONIC/GROOT CSV
+adapter notes, see [`docs/motion_format.md`](docs/motion_format.md).
+
 ---
 
 ## 🤖 Real-Robot Deployment
