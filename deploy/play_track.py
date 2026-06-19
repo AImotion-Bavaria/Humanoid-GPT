@@ -299,12 +299,20 @@ def load_offline_motions(track_dir: str, mj_model: mujoco.MjModel, freq: int = 5
             data["qpos"] = np.concatenate(
                 [data["root_pos"], data["root_rot"], data["dof_pos"]], axis=1
             )
+        elif "qpos" in data and "fps" in data:
+            qpos_src = np.asarray(data["qpos"], dtype=np.float32)
+            if qpos_src.ndim == 2 and qpos_src.shape[1] in (36, 43):
+                qpos_joint_only = np.tile(
+                    consts.DEFAULT_QPOS[None], (qpos_src.shape[0], 1)
+                )
+                qpos_joint_only[:, 7:] = qpos_src[:, 7:36]
+                data["qpos"] = qpos_joint_only
         if "qpos" not in data:
             print(f"[WARN] Skipping {f.name}: no qpos field")
             continue
 
         data["qpos"] = apply_ema_qpos(data["qpos"])
-        freq_src = float(data.get("frequency", 50))
+        freq_src = float(data.get("frequency", data.get("fps", 50)))
         kpt_data = qpos2kpt(
             mj_model, np.float32(data["qpos"]),
             freq_src=freq_src, freq_tgt=freq,
@@ -425,6 +433,7 @@ def run_sim(args: "DeployArgs"):
     traj_metrics = None  # For offline tracking: kpt/joint/root errors, state_history
     traj_filename = None
     prev_online_ref = None
+    ref_ghost = None
 
     print("\n=== Simulation ready. Press number keys to switch modes. ===\n")
 
@@ -439,6 +448,13 @@ def run_sim(args: "DeployArgs"):
 
             cmd = keyboard.step_command()
             mode = cmd.mode
+
+            if not mj_sim.headless and mj_sim.viewer is not None and ref_ghost is None:
+                try:
+                    from utils.ref_ghost import RefGhostRenderer
+                    ref_ghost = RefGhostRenderer(mj_sim.mj_model, rgba=(0.2, 0.8, 0.2, 0.4))
+                except Exception as e:
+                    print(f"[Ghost] Failed to initialize RefGhostRenderer: {e}")
 
             # Mode transitions
             entering_track = (last_mode == 0) and (mode >= 1)
@@ -495,6 +511,10 @@ def run_sim(args: "DeployArgs"):
                     state.mj_data.ctrl[:] = torques
                     mujoco.mj_step(mj_sim.mj_model, state.mj_data)
 
+                # Clear ghost in walk mode
+                if ref_ghost is not None:
+                    ref_ghost.reset_scene(mj_sim.viewer.user_scn)
+
             elif mode == 1:
                 # Online retarget
                 if mocap_buffer is not None:
@@ -511,6 +531,14 @@ def run_sim(args: "DeployArgs"):
                     )
                     state = mj_sim.step(state, motor_targets)
 
+                    # Update ghost with the rebiaised reference qpos
+                    if ref_ghost is not None:
+                        # Rebias to match main simulation frame
+                        qpos_full_rebiaised = live_converter._rebias_qpos(qpos_full)
+                        ref_ghost.set_qpos(qpos_full_rebiaised)
+                        ref_ghost.reset_scene(mj_sim.viewer.user_scn)
+                        ref_ghost.add_to_scene(mj_sim.viewer.user_scn)
+
             else:
                 # Offline tracking (mode >= 2)
                 if ref_traj is not None:
@@ -522,6 +550,12 @@ def run_sim(args: "DeployArgs"):
                         state, {"ref_curr": ref_curr, "ref_next": ref_next}
                     )
                     state = mj_sim.step(state, motor_targets)
+
+                    # Update ghost with the reference qpos
+                    if ref_ghost is not None:
+                        ref_ghost.set_qpos(ref_curr["qpos"][0])
+                        ref_ghost.reset_scene(mj_sim.viewer.user_scn)
+                        ref_ghost.add_to_scene(mj_sim.viewer.user_scn)
 
                     # Collect metrics (same as inference.py)
                     if traj_metrics is not None:
@@ -589,11 +623,11 @@ def run_real(args: "DeployArgs"):
     ctrl_dt = 1.0 / freq
     env_cfg = g1_infer_env_config(ctrl_dt = ctrl_dt)
 
-    # Track policy (TensorRT for real-robot inference)
+    # Track policy (TensorRT preferred, CPU fallback if unavailable)
     policy_args = PolicyArgs(
         load_path=args.onnx_track, policy_type=args.policy_type,
     )
-    track_policy = get_policy_onnx(policy_args, use_trt=True, strict_trt=True)
+    track_policy = get_policy_onnx(policy_args, use_trt=True, strict_trt=False)
     walk_policy = WalkPolicy(args.onnx_walk)
 
     # Offline motions
@@ -621,18 +655,25 @@ def run_real(args: "DeployArgs"):
     infer_fn = G1TrackInferFn(env_cfg, phantom_model, track_policy, privileged=False)
     live_converter = LiveRefConverter(phantom_model, ctrl_dt)
 
-    # Online retarget
-    buf_mocap, ts_mocap, buf_hand = start_realtime_retarget(
-        robot="unitree_g1", dof_full=7 + 29,
-        actual_human_height=args.human_height,
-        visualize_retarget=args.visualize_retarget,
-        mocap_type=args.mocap_type,
-        buffer_ms=args.buffer_ms,
-        xsens_host=args.xsens_host,
-        xsens_port=args.xsens_port,
-        xsens_protocol=args.xsens_protocol,
-    )
-    mocap_buffer = MocapBuffer(buf_mocap, ts_mocap)
+    # Online retarget (optional)
+    mocap_buffer = None
+    buf_hand = None
+    if not args.no_mocap:
+        try:
+            buf_mocap, ts_mocap, buf_hand = start_realtime_retarget(
+                robot="unitree_g1", dof_full=7 + 29,
+                actual_human_height=args.human_height,
+                visualize_retarget=args.visualize_retarget,
+                mocap_type=args.mocap_type,
+                buffer_ms=args.buffer_ms,
+                xsens_host=args.xsens_host,
+                xsens_port=args.xsens_port,
+                xsens_protocol=args.xsens_protocol,
+            )
+            mocap_buffer = MocapBuffer(buf_mocap, ts_mocap)
+            print("[Mocap] Retarget subprocess started.")
+        except Exception as e:
+            print(f"[Mocap] Failed to start retarget: {e}. Online mode disabled.")
 
     # Hand controller
     hand_ctrl = None
@@ -681,6 +722,9 @@ def run_real(args: "DeployArgs"):
             low_ctrl.step(motor_targets, KPs_walking, KDs_walking)
         else:
             if mode == 1:
+                if mocap_buffer is None:
+                    last_mode = mode
+                    return
                 qpos_full, _ = mocap_buffer.read()
                 ref_new = live_converter.convert(qpos_full)
                 if prev_online_ref is None:
@@ -706,7 +750,7 @@ def run_real(args: "DeployArgs"):
             )
             low_ctrl.step(np.asarray(motor_targets).flatten(), consts.KPs, consts.KDs)
 
-            if hand_ctrl is not None:
+            if hand_ctrl is not None and buf_hand is not None:
                 hand_cmd = read_hand_buffer(buf_hand)
                 last_left_hand, last_right_hand = update_hand_from_mocap(
                     hand_ctrl, hand_cmd, last_left_hand, last_right_hand,
@@ -757,7 +801,7 @@ def run_real(args: "DeployArgs"):
 @dataclass
 class DeployArgs:
     onnx_walk: str = "storage/ckpts/G1-Walk/07140632_G1-Walk_v2.0.0_baseline.onnx"
-    track_dir: str = "storage/test"
+    track_dir: str = "storage/test/sub3_largebox_000_original.npz"
     onnx_track: str = "storage/ckpts/pns_wo_priv216.onnx"
     policy_type: str = "mlp"
     convert_xml_path: str = str(consts.TRACK_XML)
@@ -767,7 +811,7 @@ class DeployArgs:
 
     # Mocap
     no_mocap: bool = False
-    mocap_type: str = "pnlink"  # one of: pnlink | xsens
+    mocap_type: str = "pnlink"  # one of: pnlink | xsens | pico | pico_pose_raw
     human_height: float = 1.7
     visualize_retarget: bool = True
     buffer_ms: float = 30.0

@@ -47,6 +47,22 @@ class ParallelEvalArgs(Args):
     workers: int = 1
 
 
+_LEGACY_KEY_MAP = {
+    "navi_pose":  "gv2wrd_pose",
+    "kpt_npose":  "kpt2gv_pose",
+    "kpt_cvel":   "kpt_cvel_in_gv",
+    "navi_vel":   "gv_vel",
+}
+
+
+def _remap_legacy_keys(data: dict) -> dict:
+    """Translate legacy npz key names to the current naming convention."""
+    for old_key, new_key in _LEGACY_KEY_MAP.items():
+        if old_key in data and new_key not in data:
+            data[new_key] = data.pop(old_key)
+    return data
+
+
 def _load_npz_with_qpos(file_path: Path) -> Dict:
     data = dict(np.load(file_path, allow_pickle=True))
     if "qpos" not in data and {"root_pos", "root_rot", "dof_pos"} <= data.keys():
@@ -56,6 +72,7 @@ def _load_npz_with_qpos(file_path: Path) -> Dict:
         )
     if "qpos" not in data:
         raise ValueError(f"{file_path} missing qpos (or root_pos/root_rot/dof_pos) field, cannot convert.")
+    data = _remap_legacy_keys(data)
     return data
 
 

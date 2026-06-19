@@ -1,10 +1,9 @@
 """Online motion-capture retarget subprocess.
 
-Launches a background process that reads from PNLink or Xsens MVN,
+Launches a background process that reads from PNLink, Xsens MVN, or PICO,
 runs GMR (General Motion Retargeting), and writes the latest qpos_full
 into shared memory for the main deploy loop to consume.  Source
-selection is controlled by the ``mocap_type`` string (``"pnlink"`` or
-``"xsens"``; anything other than ``"xsens"`` falls back to PNLink).
+selection is controlled by the ``mocap_type`` string.
 """
 
 from __future__ import annotations
@@ -68,9 +67,17 @@ def _retarget_worker(
         except (OSError, PermissionError):
             pass
 
+    mocap_label = (mocap_type or "").lower()
+    if mocap_label in ("pico", "pico_g1_bridge", "pico_bridge"):
+        _pico_g1_bridge_worker(buf, buf_hand, ts, ready_evt, stop_evt)
+        return
+    if mocap_label in ("pico_pose_raw", "pico_raw"):
+        _pico_pose_worker(buf, buf_hand, ts, ready_evt, stop_evt)
+        return
+
     from general_motion_retargeting import GeneralMotionRetargeting as GMR
 
-    if (mocap_type or "").lower() == "xsens":
+    if mocap_label == "xsens":
         from deploy.xsens.client import XsensClient
         client = XsensClient(
             host=xsens_host, port=xsens_port, protocol=xsens_protocol,
@@ -177,6 +184,177 @@ def _retarget_worker(
             client.stop()
 
 
+def _unpack_sonic_pose_message(packed_data: bytes, topic: str = "pose") -> dict:
+    import json
+    import numpy as np
+
+    topic_bytes = topic.encode("utf-8")
+    if not packed_data.startswith(topic_bytes):
+        raise ValueError(f"Message does not start with topic '{topic}'")
+
+    offset = len(topic_bytes)
+    header_size = 1280
+    if len(packed_data) < offset + header_size:
+        raise ValueError(f"Packed PICO pose data is too small: {len(packed_data)} bytes")
+
+    header_bytes = packed_data[offset: offset + header_size]
+    null_idx = header_bytes.find(b"\x00")
+    if null_idx >= 0:
+        header_bytes = header_bytes[:null_idx]
+    header = json.loads(header_bytes.decode("utf-8"))
+
+    dtype_map = {
+        "f32": np.float32,
+        "f64": np.float64,
+        "i32": np.int32,
+        "i64": np.int64,
+        "bool": np.bool_,
+    }
+
+    result = {"version": header.get("v", 0), "endian": header.get("endian", "le")}
+    current_offset = offset + header_size
+    for field in header.get("fields", []):
+        dtype = dtype_map.get(field["dtype"], np.float32)
+        shape = tuple(field["shape"])
+        n_bytes = int(np.prod(shape)) * np.dtype(dtype).itemsize
+        payload = packed_data[current_offset: current_offset + n_bytes]
+        result[field["name"]] = np.frombuffer(payload, dtype=dtype).reshape(shape).copy()
+        current_offset += n_bytes
+
+    return result
+
+
+def _pico_hand_state(data: dict) -> np.ndarray:
+    import numpy as np
+
+    left_trigger = float(np.ravel(data.get("left_trigger", [0.0]))[0])
+    right_trigger = float(np.ravel(data.get("right_trigger", [0.0]))[0])
+    return np.array(
+        [
+            1.0 if left_trigger < 0.5 else 0.0,
+            left_trigger,
+            1.0 if right_trigger < 0.5 else 0.0,
+            right_trigger,
+        ],
+        dtype=np.float32,
+    )
+
+
+def _pico_pose_worker(buf, buf_hand, ts, ready_evt, stop_evt):
+    import zmq
+    import time
+    import numpy as np
+
+    print("[Retarget] Connecting to Sonic PICO POSE stream on port 5556...")
+    context = zmq.Context()
+    socket = context.socket(zmq.SUB)
+    socket.connect("tcp://localhost:5556")
+    socket.setsockopt_string(zmq.SUBSCRIBE, "pose")
+    socket.setsockopt(zmq.RCVTIMEO, 1000)
+
+    x, y, yaw = 0.0, 0.0, 0.0
+    z = 0.74
+    max_linear_vel = 0.5
+    last_time = None
+
+    while not stop_evt.is_set():
+        try:
+            raw_msg = socket.recv()
+            data = _unpack_sonic_pose_message(raw_msg, topic="pose")
+
+            if "joint_pos" not in data:
+                raise KeyError("PICO POSE packet is missing required field 'joint_pos'")
+
+            curr_time = time.time()
+            dt = 0.02 if last_time is None else curr_time - last_time
+            last_time = curr_time
+
+            if "heading_increment" in data:
+                yaw += float(np.ravel(data["heading_increment"])[0])
+
+            if "joysticks" in data:
+                lx, ly = np.ravel(data["joysticks"])[:2].astype(float)
+                if abs(lx) < 0.15:
+                    lx = 0.0
+                if abs(ly) < 0.15:
+                    ly = 0.0
+                v_fwd = ly * max_linear_vel
+                v_strafe = -lx * max_linear_vel
+                cos_y = np.cos(yaw)
+                sin_y = np.sin(yaw)
+                x += (cos_y * v_fwd - sin_y * v_strafe) * dt
+                y += (sin_y * v_fwd + cos_y * v_strafe) * dt
+
+            joint_pos = np.asarray(data["joint_pos"][-1], dtype=np.float32).reshape(-1)
+            if joint_pos.size < 29:
+                joint_pos = np.pad(joint_pos, (0, 29 - joint_pos.size))
+            elif joint_pos.size > 29:
+                joint_pos = joint_pos[:29]
+
+            qpos_full = np.zeros(36, dtype=np.float32)
+            qpos_full[0] = x
+            qpos_full[1] = y
+            qpos_full[2] = z
+            qpos_full[3] = np.cos(yaw / 2.0)
+            qpos_full[6] = np.sin(yaw / 2.0)
+            qpos_full[7:] = joint_pos
+            hand_state = _pico_hand_state(data)
+
+            with buf.get_lock(), ts.get_lock():
+                np.frombuffer(buf.get_obj(), dtype=np.float32, count=qpos_full.size)[:] = qpos_full
+                ts.value = curr_time
+
+            with buf_hand.get_lock():
+                np.frombuffer(buf_hand.get_obj(), dtype=np.float32)[:] = hand_state
+
+            if not ready_evt.is_set():
+                ready_evt.set()
+                print("[Retarget] Sonic PICO POSE stream active and ready.")
+        except zmq.Again:
+            continue
+        except Exception as e:
+            print(f"[Retarget] Error receiving/processing Sonic PICO POSE: {e}")
+            time.sleep(0.1)
+
+
+def _pico_g1_bridge_worker(buf, buf_hand, ts, ready_evt, stop_evt):
+    import zmq
+    import msgpack
+    import time
+    import numpy as np
+
+    print("[Retarget] Connecting to PICO G1 ZMQ bridge on port 5558...")
+    context = zmq.Context()
+    socket = context.socket(zmq.SUB)
+    socket.connect("tcp://localhost:5558")
+    socket.setsockopt_string(zmq.SUBSCRIBE, "")
+    socket.setsockopt(zmq.RCVTIMEO, 1000)
+
+    while not stop_evt.is_set():
+        try:
+            raw_msg = socket.recv()
+            data = msgpack.unpackb(raw_msg)
+            
+            qpos_full = np.array(data["qpos_full"], dtype=np.float32)
+            hand_state = np.array(data["hand_state"], dtype=np.float32)
+            
+            with buf.get_lock(), ts.get_lock():
+                np.frombuffer(buf.get_obj(), dtype=np.float32, count=qpos_full.size)[:] = qpos_full
+                ts.value = time.time()
+                
+            with buf_hand.get_lock():
+                np.frombuffer(buf_hand.get_obj(), dtype=np.float32)[:] = hand_state
+                
+            if not ready_evt.is_set():
+                ready_evt.set()
+                print("[Retarget] PICO G1 bridge stream active and ready.")
+        except zmq.Again:
+            continue
+        except Exception as e:
+            print(f"[Retarget] Error receiving/processing PICO ZMQ: {e}")
+            time.sleep(0.1)
+
+
 def _visualize_worker(buf, stop_evt, robot="unitree_g1"):
     from general_motion_retargeting import RobotMotionViewer
     viewer = RobotMotionViewer(robot_type=robot, motion_fps=120.0)
@@ -233,7 +411,7 @@ def start_realtime_retarget(
     p.start()
 
     vis_p = None
-    if visualize_retarget:
+    if visualize_retarget and (mocap_type or "").lower() != "pico":
         vis_p = ctx.Process(target=_visualize_worker, args=(buf, stop_evt), daemon=True)
         vis_p.start()
         atexit.register(lambda: vis_p.terminate())
